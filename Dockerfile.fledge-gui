@@ -1,0 +1,45 @@
+FROM node:18-alpine AS base
+RUN apk add --no-cache git nginx curl bash build-base python3
+RUN corepack enable && corepack prepare yarn@1 --activate
+ENV CYPRESS_INSTALL_BINARY=0 NG_CLI_ANALYTICS=false
+RUN yarn config set network-timeout 600000 -g
+WORKDIR /workspace
+
+FROM base AS build
+RUN git clone https://github.com/fledge-iot/fledge-gui.git
+WORKDIR /workspace/fledge-gui
+RUN yarn install --frozen-lockfile --no-progress
+RUN echo '{"version":"3.1.0","build":"docker-build","date":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"}' > git-version.json \
+ && [ -x ./git-version ] || (echo -e '#!/bin/bash\necho 3.1.0' > git-version && chmod +x git-version)
+RUN chmod +x build && ./build --clean-start
+
+FROM base AS final
+COPY --from=build /workspace/fledge-gui/dist/ /usr/share/nginx/html/
+RUN rm -f /etc/nginx/conf.d/default.conf /etc/nginx/http.d/default.conf || true \
+ && mkdir -p /etc/nginx/http.d
+RUN cat > /etc/nginx/http.d/fledge.conf <<'EOF'
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+  index fledge.html;
+
+  location / {
+    try_files $uri $uri/ /fledge.html;
+  }
+
+  location /fledge/ {
+    proxy_pass http://fledge-core:8081/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_http_version 1.1;
+  }
+}
+EOF
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -fsS http://localhost:80 || exit 1
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

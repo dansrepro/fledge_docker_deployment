@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  fledge-core:
+    build:
+      context: .
+      dockerfile: Dockerfile.fledge
+      target: production
+    container_name: fledge-core
+    environment:
+      - FLEDGE_ROOT=/usr/local/fledge
+      - FLEDGE_DATA=/usr/local/fledge/data
+    ports:
+      - "8081:8081"
+      - "1995:1995"
+    volumes:
+      - fledge_data_v310:/usr/local/fledge/data
+      - fledge_logs_v310:/var/log/fledge
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/fledge/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  fledge-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.fledge-gui
+      target: final
+    container_name: fledge-gui
+    depends_on:
+      fledge-core:
+        condition: service_healthy
+    ports:
+      - "8082:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    container_name: mqtt-broker
+    # expose to your LAN so the ST board can publish directly
+    ports:
+      - "1883:1883"
+    command: [ "mosquitto", "-c", "/mosquitto-no-auth.conf" ]
+    volumes:
+      - ./mosquitto-no-auth.conf:/mosquitto-no-auth.conf:ro
+    restart: unless-stopped
+
+volumes:
+  fledge_data_v310: {}
+  fledge_logs_v310: {}
